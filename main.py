@@ -3,6 +3,10 @@ import json
 import time
 from bs4 import BeautifulSoup
 import pandas as pd
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+OUTPUT_FILE = BASE_DIR / "data" / "raw_artworks.json"
 
 HEADERS = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -54,6 +58,9 @@ def harvest_ids(listing_url):
 
 
 # --------------------- Scrape Website and created JSON file ------------------------- #
+
+# --------------Run this one time to create the data, then comment it ---------------- #
+
 # base_url = "https://www.metmuseum.org/art/collection/search?department=The+American+Wing"
 # offset = 0
 # page_count = 0
@@ -86,17 +93,18 @@ def harvest_ids(listing_url):
 
 # print(f"\nFailed -> {failed_count}\n")
 
-# with open("raw_artworks.json", "w") as f:
+# with open(OUTPUT_FILE, "w") as f:
 #     json.dump(all_artworks, f, indent=2)
 
 
-# --------------------- CLeaning Save Data ------------------------- #
+# --------------------- Cleaning Save Data ------------------------- #
 
-with open("raw_artworks.json", "r") as f:
+with open(OUTPUT_FILE, "r") as f:
     all_artworks = json.load(f)
 
 df = pd.DataFrame(all_artworks)
 
+# Clean columns
 df["maker"] = (df["Artist"]
     .combine_first(df["Maker"])
     .combine_first(df["Manufacturer"])
@@ -118,9 +126,18 @@ df = df.rename(columns={"Title": "title",
                         "Curatorial Department": "curatorial_department",
                         "objectID": "object_id"})
 
+# Clean dates
 df["year_start"] = df['date'].str.extract(r'(\d{4})')
-
 df["year_start"] = df["year_start"].astype("Int64")
 
-print(df["year_start"])
-df.info()
+# Clean dimensions
+df['dimensions'] = df['dimensions'].str.replace('×', 'x')
+df['dimension_cm'] = df['dimensions'].str.extract(r'\(([\d.\sx]+?)\s*cm')
+df[['height_cm', 'width_cm', 'depth_cm']] = df['dimension_cm'].str.split('x', expand=True)
+df['height_cm'] = df['height_cm'].astype(float)
+df['width_cm'] = df['width_cm'].astype(float)
+df['depth_cm'] = df['depth_cm'].astype(float)
+
+print(df['height_cm'].sample(20))
+print(df['height_cm'].isna().sum())
+print(df.sample(10))
