@@ -2,13 +2,15 @@ import requests
 import json
 import time
 import os
-from bs4 import BeautifulSoup
 import pandas as pd
+from bs4 import BeautifulSoup
 from pathlib import Path
+from dotenv import load_dotenv
+from datetime import datetime
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import Integer, String, Float, create_engine, text, Text
-from dotenv import load_dotenv
+from sqlalchemy.dialects.postgresql import insert
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_FILE = BASE_DIR / "data" / "raw_artworks.json"
@@ -68,6 +70,38 @@ def harvest_ids(listing_url):
         ids.add(object_id)
 
     return list(ids)
+
+def validate_records(records):
+    valid = []
+    invalid = []
+    for rec in records:
+        errors = check_record(rec)
+        if errors:
+            invalid.append((rec["object_id"], errors))
+        else:
+            valid.append(rec)
+    return valid, invalid
+
+def check_record(record):
+    errors = []
+    # -------- Check 1: required fields present -------- #
+    required_fields = ["title", "medium", "year_start", "object_number", "curatorial_department", "credit_line"]
+    for field in required_fields:
+        if record.get(field) is None:
+            errors.append(f"{record['object_id']} is missing {field}")
+    
+    # -------- Check 2: year sanity -------- #
+    if record.get("year_start") is not None:
+        if record.get("year_start") < 1500 or record.get("year_start") > datetime.now().year:
+            errors.append(f"year {record.get('year_start')} is out of range")
+    
+    # -------- Check 3: dimension sanity -------- #
+    dimension_col = ["height_cm", "width_cm", "depth_cm"]
+    for col in dimension_col:
+        if record.get(col) is not None:
+            if record.get(col) <= 0 or record.get(col) > 2000:
+                errors.append(f"{col} = {record.get(col)} implausible")
+    return errors
 
 
 # --------------------- Scrape Website and created JSON file ------------------------- #
@@ -152,7 +186,7 @@ df['width_cm'] = df['width_cm'].astype(float)
 df['depth_cm'] = df['depth_cm'].astype(float)
 df = df.drop(columns=['dimension_cm']) 
 
-# --------------------- Database Creation ------------------------- #
+# --------------------- Table Creation ------------------------- #
 
 class Base(DeclarativeBase):
     pass
@@ -177,3 +211,32 @@ class Artworks(Base):
     curatorial_department: Mapped[str] = mapped_column(Text)
 
 Base.metadata.create_all(engine)
+
+# --------------------- the idempotent load ------------------------- #
+
+clean_df = df.astype(object).where(df.notna(), None)
+records = clean_df.to_dict(orient="records")
+
+# records[1]["title"] = None # test check 1
+# records[2]["year_start"] = 50000 # test check 2
+# records[3]["height_cm"] = -5 # test check 3
+
+valid, invalid = validate_records(records)
+
+print(f"{len(valid)} valid, {len(invalid)} invalid")
+for object_id, errors in invalid:
+    print(f"  ✗ {object_id}: {errors}")
+
+stmt = insert(Artworks).values(valid)
+
+update_columns = [col for col in Artworks.__table__.columns.keys() if col != "object_id"]
+
+stmt = stmt.on_conflict_do_update(
+    index_elements=["object_id"],
+    set_={col: stmt.excluded[col] for col in update_columns},
+)
+
+with engine.begin() as conn:
+    conn.execute(stmt)
+
+print(f"Upserted {len(valid)} records!")
