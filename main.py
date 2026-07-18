@@ -1,18 +1,31 @@
 import requests
 import json
 import time
+import os
 from bs4 import BeautifulSoup
 import pandas as pd
 from pathlib import Path
+from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Integer, String, Float, create_engine, text, Text
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_FILE = BASE_DIR / "data" / "raw_artworks.json"
+OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 HEADERS = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
 }
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
+engine = create_engine(os.getenv("DATABASE_URL"))
+
+# --------------------- Function ------------------------- #
 
 def scrape_artwork(object_id):
     """ Return a full record for one ID """
@@ -137,7 +150,30 @@ df[['height_cm', 'width_cm', 'depth_cm']] = df['dimension_cm'].str.split('x', ex
 df['height_cm'] = df['height_cm'].astype(float)
 df['width_cm'] = df['width_cm'].astype(float)
 df['depth_cm'] = df['depth_cm'].astype(float)
+df = df.drop(columns=['dimension_cm']) 
 
-print(df['height_cm'].sample(20))
-print(df['height_cm'].isna().sum())
-print(df.sample(10))
+# --------------------- Database Creation ------------------------- #
+
+class Base(DeclarativeBase):
+    pass
+
+class Artworks(Base):
+    __tablename__ = "artworks"
+
+    object_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    object_number: Mapped[str] = mapped_column(String(32), unique=True)
+    title: Mapped[str] = mapped_column(Text)
+    maker: Mapped[str | None] = mapped_column(Text)
+    date: Mapped[str] = mapped_column(Text)
+    year_start: Mapped[int] = mapped_column(Integer)
+    geography: Mapped[str | None] = mapped_column(Text)
+    culture: Mapped[str | None] = mapped_column(Text)
+    medium: Mapped[str] = mapped_column(Text)
+    dimensions: Mapped[str | None] = mapped_column(Text)
+    height_cm: Mapped[float | None] = mapped_column(Float)
+    width_cm: Mapped[float | None] = mapped_column(Float)
+    depth_cm: Mapped[float | None] = mapped_column(Float)
+    credit_line: Mapped[str] = mapped_column(Text)
+    curatorial_department: Mapped[str] = mapped_column(Text)
+
+Base.metadata.create_all(engine)
