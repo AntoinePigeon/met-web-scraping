@@ -93,15 +93,17 @@ Records that fail are **isolated and logged**, not dropped silently and not allo
 
 ```
 met-web-scraping/
-├── main.py               # the full pipeline (scrape, clean, validate, load)
+├── main.py           # orchestrator (extract, transform, validate, load)
+├── config.py         # shared setup: env, engine, logger, paths, headers
+├── models.py         # SQLAlchemy schema (Base + Artworks)
+├── scraper.py        # scraping logic  (EXTRACT)
+├── transform.py      # cleaning + parsing  (TRANSFORM)
+├── validate.py       # data-quality checks  (VALIDATE)
+├── database.py       # table creation + idempotent upsert  (LOAD)
 ├── data/
-│   └── raw_artworks.json # cached raw extract (committed for reproducibility)
-├── .env                  # DATABASE_URL (not committed)
-├── .env.example          # template showing required variables
+│   └── raw_artworks.json
 ├── requirements.txt
-├── pipeline.log          # run logs (not committed)
 └── README.md
-└── test-connection.py    # test the connection to the Met website
 ```
 
 ---
@@ -182,7 +184,6 @@ This project took me from "I can scrape a page" to "I can build a pipeline that 
 
 ## Future work
 
-- Split the single script into modules (`scraper.py`, `transform.py`, `database.py`, `validate.py`, `main.py`)
 - Schedule the pipeline (cron, GitHub Actions, or AWS Lambda + EventBridge)
 - Add a `pytest` suite for the transform and validation logic
 - Normalize creators into a separate `artists` table
