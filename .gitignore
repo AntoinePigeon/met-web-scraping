@@ -158,6 +158,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+pipeline.log
 
 # Spyder project settings
 .spyderproject

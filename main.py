@@ -2,6 +2,7 @@ import requests
 import json
 import time
 import os
+import logging
 import pandas as pd
 from bs4 import BeautifulSoup
 from pathlib import Path
@@ -11,6 +12,19 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import Integer, String, Float, create_engine, text, Text
 from sqlalchemy.dialects.postgresql import insert
+
+# ---- logging setup (runs once) ---- #
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("pipeline.log"),
+        logging.StreamHandler(),
+    ],
+)
+
+logger = logging.getLogger(__name__)
+# ---- end logging setup ---- #
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_FILE = BASE_DIR / "data" / "raw_artworks.json"
@@ -125,7 +139,7 @@ def check_record(record):
 #     all_ids.update(new_ids)
 #     offset += 42
 #     page_count += 1
-#     print(f"offset {offset}: got {len(new_ids)} ids")
+#     logger.info(f"offset {offset}: got {len(new_ids)} ids")
 #     time.sleep(2)
 
 # for i, oid in enumerate(sorted(all_ids)):
@@ -133,12 +147,12 @@ def check_record(record):
 #         new_artwork = scrape_artwork(oid)
 #         all_artworks.append(new_artwork)
 #     except Exception as e:
-#         print(f"Failed on {oid}: {e}")
+#         logger.error(f"Failed on {oid}: {e}")
 #         failed_count += 1
-#     print(f"[{i+1}/{len(all_ids)}] scraped {new_artwork['Title']}")
+#     logger.info(f"[{i+1}/{len(all_ids)}] scraped {new_artwork['Title']}")
 #     time.sleep(2)
 
-# print(f"\nFailed -> {failed_count}\n")
+# logger.info(f"\nFailed -> {failed_count}\n")
 
 # with open(OUTPUT_FILE, "w") as f:
 #     json.dump(all_artworks, f, indent=2)
@@ -223,9 +237,9 @@ records = clean_df.to_dict(orient="records")
 
 valid, invalid = validate_records(records)
 
-print(f"{len(valid)} valid, {len(invalid)} invalid")
+logger.info(f"{len(valid)} valid, {len(invalid)} invalid")
 for object_id, errors in invalid:
-    print(f"  ✗ {object_id}: {errors}")
+    logger.warning(f"  ✗ {object_id}: {errors}")
 
 stmt = insert(Artworks).values(valid)
 
@@ -239,4 +253,4 @@ stmt = stmt.on_conflict_do_update(
 with engine.begin() as conn:
     conn.execute(stmt)
 
-print(f"Upserted {len(valid)} records!")
+logger.info(f"Upserted {len(valid)} records!")
