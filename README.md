@@ -185,7 +185,6 @@ This project took me from "I can scrape a page" to "I can build a pipeline that 
 ## Future work
 
 - Schedule the pipeline (cron, GitHub Actions, or AWS Lambda + EventBridge)
-- Add a `pytest` suite for the transform and validation logic
 - Normalize creators into a separate `artists` table
 - Compare scraped values against the Met's official Open Access API as a ground-truth check
 
