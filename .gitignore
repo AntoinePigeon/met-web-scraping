@@ -159,6 +159,7 @@ ENV/
 env.bak/
 venv.bak/
 pipeline.log
+.DS_Store
 
 # Spyder project settings
 .spyderproject
@@ -205,6 +206,7 @@ cython_debug/
 # .vscode/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
+MetObjects.txt
 
 # Ruff stuff:
 .ruff_cache/
