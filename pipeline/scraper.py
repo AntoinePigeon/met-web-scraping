@@ -1,10 +1,10 @@
 import json
 import requests
 import time
-from config import logger, OUTPUT_FILE
+from pipeline.config import logger, OUTPUT_FILE
 from bs4 import BeautifulSoup
 
-from config import HEADERS
+from pipeline.config import HEADERS
 
 
 def scrape_all():

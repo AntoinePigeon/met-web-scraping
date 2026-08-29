@@ -160,6 +160,7 @@ env.bak/
 venv.bak/
 pipeline.log
 .DS_Store
+personal_note
 
 # Spyder project settings
 .spyderproject

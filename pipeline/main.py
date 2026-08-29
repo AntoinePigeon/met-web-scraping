@@ -1,10 +1,10 @@
 import json
 
-from config import OUTPUT_FILE, logger
-from scraper import scrape_all
-from transform import clean_data
-from validate import validate_records
-from database import init_db, load_records
+from pipeline.config import OUTPUT_FILE, logger
+from pipeline.scraper import scrape_all
+from pipeline.transform import clean_data
+from pipeline.validate import validate_records
+from pipeline.database import init_db, load_records
 
 
 def main():

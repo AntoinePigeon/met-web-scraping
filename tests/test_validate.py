@@ -1,4 +1,4 @@
-from validate import check_record
+from pipeline.validate import check_record
 
 def make_record(**overrides):
     """A known-good record, with optional field overrides for testing."""
