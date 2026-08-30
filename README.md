@@ -153,7 +153,7 @@ DATABASE_URL=postgresql+psycopg2://YOUR_USER@localhost:5432/met_art
 **5. Run the pipeline**
 
 ```bash
-python main.py
+python -m pipeline.main
 ```
 
 The table creates itself on first run, and the pipeline loads from the cached `raw_artworks.json`, so **no scraping is required** to see it work end to end. The scraping stage is included in the code and can be re-enabled to refresh the data.

@@ -16,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---- paths ---- #
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_FILE = BASE_DIR / "data" / "raw_artworks.json"
 OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
