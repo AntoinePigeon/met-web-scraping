@@ -8,7 +8,7 @@ Last updated: 2026-08-21
 
 | Field | Type | Source column | Nullable | Notes |
 |---|---|---|---|---|
-| id | INTEGER | Object ID | No | Primary key |
+| object_id | INTEGER | Object ID | No | Primary key |
 | highlight | BOOLEAN | Is Highlight | No | Cast from "True"/"False" |
 | department | TEXT | Department | No | |
 | title | TEXT | Title | Yes | |
