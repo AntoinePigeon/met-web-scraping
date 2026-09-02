@@ -10,7 +10,7 @@ class Artworks(Base):
     __tablename__ = "artworks"
 
     object_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
-    object_number: Mapped[str] = mapped_column(String(32), unique=True)
+    object_number: Mapped[str] = mapped_column(Text)
     title: Mapped[str] = mapped_column(Text)
     maker: Mapped[str | None] = mapped_column(Text)
     date: Mapped[str] = mapped_column(Text)
