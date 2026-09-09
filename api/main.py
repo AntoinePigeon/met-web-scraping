@@ -10,15 +10,38 @@ app = FastAPI(
     version="0.1.0",
 )
 class ArtworkResponse(BaseModel):
+    """A single artwork, shaped for a human reader rather than for machine processing.
+
+Includes the Met's original display strings for dates and dimensions alongside the
+parsed numeric columns, since parsing discards qualifiers a reader needs.
+"""
     model_config = ConfigDict(from_attributes=True)
 
-    object_id: int
-    title: str
-    maker: str | None
-    date: str
-    year_start: int
-    medium: str
+    # identity
+    id: int
+    number: str
+    highlight: bool
+    department: str
+    # description
+    name: str | None
+    title: str | None
+    culture: str | None
+    # physical
+    medium: str | None
+    classification: str | None
     dimensions: str | None
+    height_cm: float | None
+    width_cm: float | None
+    depth_cm: float | None
+    # provenance
+    date: str | None
+    year_start: int
+    year_end: int
+    # artist
+    artist_name: str | None
+    credit_line: str | None
+    # source metadata
+    link: str
 
 @app.get("/health")
 def health_check():
