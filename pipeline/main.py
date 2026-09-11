@@ -1,10 +1,9 @@
 import json
 
 from pipeline.config import OUTPUT_FILE, logger
-from pipeline.scraper import scrape_all
+from pipeline.database import init_db, load_records
 from pipeline.transform import clean_data
 from pipeline.validate import validate_records
-from pipeline.database import init_db, load_records
 
 
 def main():

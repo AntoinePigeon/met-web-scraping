@@ -1,10 +1,10 @@
 import json
-import requests
 import time
-from pipeline.config import logger, OUTPUT_FILE
+
+import requests
 from bs4 import BeautifulSoup
 
-from pipeline.config import HEADERS
+from pipeline.config import HEADERS, OUTPUT_FILE, logger
 
 
 def scrape_all():
@@ -35,14 +35,14 @@ def scrape_all():
         except Exception as e:
             logger.error(f"Failed on {oid}: {e}")
             failed_count += 1
-        logger.info(f"[{i+1}/{len(all_ids)}] scraped {new_artwork['Title']}")
+        logger.info(f"[{i + 1}/{len(all_ids)}] scraped {new_artwork['Title']}")
         time.sleep(2)
 
     logger.info(f"\nFailed -> {failed_count}\n")
 
     with open(OUTPUT_FILE, "w") as f:
         json.dump(all_artworks, f, indent=2)
-    
+
     logger.info(f"Scrape complete: {len(all_artworks)} records saved, {failed_count} failed")
 
 
