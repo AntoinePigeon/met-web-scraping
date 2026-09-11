@@ -1,14 +1,12 @@
+import os
 from logging.config import fileConfig
-
 from pathlib import Path
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+
+from dotenv import load_dotenv
+from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-
-import os
 from pipeline.models import Base
-from dotenv import load_dotenv
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

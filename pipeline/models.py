@@ -1,5 +1,5 @@
+from sqlalchemy import Boolean, Float, Integer, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import Boolean, Integer, String, Float, Text
 
 
 class Base(DeclarativeBase):

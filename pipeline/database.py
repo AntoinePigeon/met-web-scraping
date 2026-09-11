@@ -1,6 +1,7 @@
 from sqlalchemy.dialects.postgresql import insert
+
 from pipeline.config import engine, logger
-from pipeline.models import Base, Artworks
+from pipeline.models import Artworks, Base
 
 
 def init_db():
