@@ -33,7 +33,8 @@ def check_record(record):
     # 3. year_start must be less than or equal to year_end (no negative durations)
 
     # Remove the 1500 bound check, since the Met has objects from before 1500.
-    # Was measured against the public-domain set, 2026-09-10, and found 84365 records with start year < 1500
+    # Was measured against the public-domain set, 2026-09-10,
+    # and found 84365 records with start year < 1500
 
     record_year_start = record.get("year_start")
     record_year_end = record.get("year_end")
@@ -53,7 +54,8 @@ def check_record(record):
     # -------- Check 3: dimension sanity -------- #
     # TODO: Dimension bounds (<= 0, > 2000) cannot be measured pre-transform.
     # The parsed columns do not exist in the source.
-    # Bounds were set against 126 American Wing objects and must be re-measured after the transform runs at scale.
+    # Bounds were set against 126 American Wing objects
+    # and must be re-measured after the transform runs at scale.
 
     # dimension_col = ["height_cm", "width_cm", "depth_cm"]
     # for col in dimension_col:

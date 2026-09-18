@@ -56,7 +56,7 @@ pytest, GitHub Actions.
 | 1 | First FastAPI endpoint, `/docs` renders | Done |
 | 2 | Pydantic response model, real DB read | Done |
 | 3 | Alembic migrations | Done |
-| 4 | Bulk load 248,325 rows | Next | In progress
+| 4 | Bulk load 248,325 rows | In progress |
 | 5 | REST design: pagination, filtering, status codes, versioning | |
 | 6 | Raw SQL analytics, `EXPLAIN ANALYZE`, index choices | |
 | 7 | Auth: API key, then JWT | |
