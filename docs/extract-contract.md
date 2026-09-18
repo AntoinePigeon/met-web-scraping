@@ -51,7 +51,7 @@ Last updated: 2026-08-21
 5. _Is Public Domain_: used as a load filter, not stored.
 6. _Museum data_: Gallery Number, Portfolio, Is Timeline Work, Repository
 
-### **Validation rules ->** \
+### **Validation rules ->** 
 **Number of rows**: 484,956  →  public domain filter  →  248,472  →  year rules  →  248,325 \
 Empty strings and whitespace-only values are normalized to NULL at extract time. \
 Quarantine: 147 rows (0.059% of 248,472) fail the year rules. 116 of those are from Egyptian Art, where BCE dating conventions break down. Failing rows are logged and excluded, not silently dropped. \
@@ -60,7 +60,7 @@ Only objects satisfying **all three rules** are loaded.:
 2. `year_start <= 2026`
 3. is Public Domain
 
-### **Known future changes ->** \
+### **Known future changes ->** 
 An object can have many artists and the columns are pipe-delimited (10.17% of objects). \
 For now, I build the flat table first, with the pipe-delimited artist columns preserved as raw source data. \
 Then normalize artists with an Alembic migration that moves the data. Separate artists table plus a link table. Artist becomes a real entity with a typed birth year.
