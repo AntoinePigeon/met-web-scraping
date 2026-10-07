@@ -567,10 +567,12 @@ the same order, and the tests were written from this spec before the functions.
 ### The shared parse rule
 
 > Normalise `×` to `x`. Split the line on `;`. For each segment, drop a leading component label
-> (text ending in a colon, such as `Backplate:`, `Sheet (confirmed):`, `Overall:`). Then, if the
-> segment starts with an axis label, put its first cm number into that label's field. Otherwise,
-> put the cm block's numbers into height, width, depth by position. Ignore any number not
-> followed by `cm`. A field already set is not overwritten.
+> (non-digit text ending in a colon). Then, in order: if the segment's axis labels and its unit
+> block's values line up one to one, each label takes its value (labelled block). Otherwise, if
+> the segment starts with an axis label, its first number before the unit fills that field.
+> Otherwise, the unit block fills height, width, depth by position. `L.` is never placed
+> directly: it is held, then placed by the fallback rule below. Numbers not followed by the
+> unit are ignored. A field already set is not overwritten.
 
 **Component labels end in a colon, axis labels end in a period.** That one character is how the
 parser tells `Backplate:` from `Diam.`. The first draft of this rule missed it, and would have put
@@ -586,7 +588,46 @@ Labels win over position everywhere, including single measurements. A lone
 | `W.` | width | |
 | `D.` | depth | Met convention: `D.` is depth, `Diam.` is diameter |
 | `Diam.` | width | For round objects, diameter is the width |
-| `L.` | width | Length is the long horizontal axis |
+| `L.` | fallback | Placed after the other axes. See below |
+
+### `L.` is a fallback axis
+
+> After `H.`, `W.`, `D.` and `Diam.` have been placed, `L.` fills width if it is still empty,
+> otherwise height if that is still empty. If both are filled, it is dropped.
+
+The first version mapped `L.` straight to width. Across the full file, 13,056 strings contain
+both `L.` and `W.`, and 2,738 contain both `L.` and `H.`. Mapping `L.` to width discarded every
+`W.` in the first group. Mapping it to height would have discarded every `H.` in the second.
+Both pairings are common, so neither fixed mapping is acceptable.
+
+| Input | Result |
+|---|---|
+| `L.` only | width |
+| `L.` + `W.` | `W.` → width, `L.` → height. A textile's length is how it hangs |
+| `L.` + `H.` | `H.` → height, `L.` → width |
+| `L.` + `Diam.` | `Diam.` → width, `L.` → height. A rod or tube |
+| `L.` + `W.` + `H.` | `L.` dropped. Documented loss |
+
+**This bug was live on rows the harness counted as parsed.** Width held a length, and every
+counter reported success. Found by counting label pairings, not by any failing test.
+
+### Labelled blocks
+
+> Collect the axis labels in a segment, in order. Remove them, then find the unit block. If the
+> number of labels equals the number of values, each label takes its value. Otherwise, the
+> earlier rules apply unchanged.
+
+The dominant textile format puts the labels in the inch part and a plain block in the cm part:
+`L. 56 1/2 x W. 24 1/4 inches (143.5 x 61.6 cm)`. Before this rule, the segment started with
+`L.`, so the parser took the first number before `cm`, which is 61.6, the width. Width came out
+right by accident; length was discarded.
+
+Removing the labels first also handles labels inside the block itself:
+`L. 1.1 × W. 0.7 × H. 0.5 cm` becomes `1.1 x 0.7 x 0.5 cm`.
+
+**The count check is the safety net.** The rule only fires when labels and values pair one to
+one, so every existing test stayed green. `Wt.` and `OH.` are not labels: the pattern requires
+the label not to be preceded by a letter, and to be followed directly by a dot.
 
 ### Cases, in precedence order
 
@@ -601,7 +642,7 @@ Labels win over position everywhere, including single measurements. A lone
 | 7 | Multi, first line unlabelled | Parse the first line, ignore later lines | 39,183 |
 | 8 | cm, anything else | Null, raw preserved | 158 |
 | 9 | Inches only | Null, raw preserved | 1,969 |
-| 10 | mm only | Parse like cm, then divide by 10 | 410 |
+| 10 | mm only | Parse like cm, then divide by 10. **Checked before inches**, see below | 410 |
 | 11 | Other, incl. one metre-only row | Null, raw preserved | 1,036 |
 | | **Total** | | **248,472** |
 
@@ -647,6 +688,60 @@ normalising `×` to `x`.
 `pipeline/main.py` imported `clean_data`, so the orchestrator is broken until the load is
 rewritten, alongside `database.py`.
 
+### What the full-file run found
+
+`scripts/check_transform.py` streams all 248,472 records through `transform_record` and counts
+outcomes. Unit tests prove the code matches the spec. **The full run tests whether the spec
+matches the data.** Each change below was made with a predicted movement, then checked.
+
+| Step | Measure | Before | After |
+|---|---|---|---|
+| First full run | parsed | 212,444 routed (spec) | 212,626 |
+| | exceptions | | **0** |
+| | time | 5.2s extract only | 5.9s. Transform costs ~0.7s |
+| mm checked before inches | overlap rows parsed | 0 | 710 of 712 |
+| Unexplained between two runs | parsed | 212,626 | 212,643 |
+| `L.` fallback | `L.`+`W.`, parsed, no height | 10,665 | 8,090 |
+| Labelled blocks | `L.`+`W.`, parsed, no height | 8,090 | **1,109** |
+| | parsed | 212,643 | 212,645 |
+
+**Current coverage: 212,645 rows, 98.4% of strings with dimension text, 85.6% of the
+collection.**
+
+**The net number hid a loss.** The first run came out 182 above the spec. The mm change alone
+recovered 710, so 528 rows routed to parsing cases were coming back empty. 506 of them had a
+label alone on the first line. **A spec built from routing conditions describes where rows go,
+not whether the work succeeds there.**
+
+**The first 15 samples were not a sample.** They suggested scrolls measured in metres were half
+the remaining problem. A seeded random sample of 40 found zero scrolls; the real shape was
+labelled blocks, about 95% of the population. The file is in object-ID order, so related objects
+sit together.
+
+**A presence check cannot see a value bug.** The `L.` collision lived on rows counted as parsed.
+It only became visible with a counter that could fail for it: `L.` and `W.` present, height empty.
+
+### Parked: continuation lines
+
+Of the remaining 1,109, a random sample of 40 split as: axes on separate lines 29, sets without
+parentheses 2, cm-first value pairs 2, unknown label `Th.` 2, source errors and ranges 5.
+
+**Axes on separate lines are the same shape as the 506 label-only rows.** One rule covers both,
+about 1,300 rows:
+
+> The first line extends through any following lines that begin with an axis label. The
+> extended block is joined with `;` and parsed.
+
+It must ship together with a set rule for letter labels without parentheses (`Kaftan a:`,
+`07.236.21a:`). Today those return empty by accident; with continuation lines alone they would
+parse the first component as the object.
+
+The tests exist in `tests/test_transform.py`, marked `xfail(strict=True)`. Implementing the rule
+turns them into XPASS failures, which is the signal to remove the marks.
+
+**Long tail, not chased:** `Th.` labels, cm-first pairs, curator typos (`(34.6 cm0`, `(cm)`),
+ranges. Roughly 10% of 1,109.
+
 ---
 
 ## 10. Next steps
@@ -655,9 +750,12 @@ rewritten, alongside `database.py`.
 
 **Done:** API response model, validation gate, CSV extract adapter, dimension parsing spec.
 
-**Immediate:** implement `parse_line`, `parse_dimensions`, and `transform_record` against
-`tests/test_transform.py`, which was written from the spec first. Then run the parser over all
-248,472 rows and confirm the per-case parsed counts match the spec table.
+**Done:** API response model, validation gate, CSV extract adapter, dimension parsing (cases,
+`L.` fallback, labelled blocks, mm precedence), full-file harness.
+
+**Paused here.** To resume: implement continuation lines and the parenthesis-free set rule
+together in `parse_dimensions`. The four `xfail` tests define the target. Then rerun
+`scripts/check_transform.py` and predict: label-only close to 0, `L.`+`W.` no height near 300.
 
 **Then:** the bulk load, rewriting `database.py` and `pipeline/main.py`.
 
@@ -731,6 +829,18 @@ any parsing code existed.
 
 **Narrow patterns to the meaning, not the shape.** `\([a-z]+\):` matched the shape of a set
 marker. `\([a-z]{1,3}\):` matches what set markers are. Narrowing recovered 4,092 measurements.
+
+**Net hides gross.** A total that matches a prediction can be two errors cancelling out. +182
+was really +710 and −528. Reconcile the movements, not just the totals.
+
+**The first N is not a random sample.** Data in storage order clusters. Sample with
+`random.sample` and a fixed seed, so the sample is fair and repeatable.
+
+**A check must be able to fail for the bug it guards.** A parsed-row count could not see a
+width that held a length.
+
+**Know which change moved a number.** Compare figures from one run, or write down what changed
+between runs.
 
 ### Recurring traps
 
