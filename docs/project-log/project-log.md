@@ -4,7 +4,7 @@ A running record of decisions, findings, and reasoning for the Met Art API proje
 Kept alongside the code so the *why* survives as well as the *what*.
 
 **Repo:** [AntoinePigeon/met-web-scraping](https://github.com/AntoinePigeon/met-web-scraping)
-**Last updated:** 2026-09-11
+**Last updated:** 2026-09-25
 
 ---
 
@@ -70,8 +70,8 @@ nothing, and index experiments on a table that fits in a handful of pages will n
 the index. Milestone 0 also produced concrete schema changes that made Alembic worth doing
 immediately rather than as an abstract exercise. Sequencing follows evidence.
 
-**Milestone 4 progress:** the API response model and the validation gate are done. The extract
-adapter, transform, and load remain.
+**Milestone 4 progress:** API response model, validation gate, CSV extract adapter, and the
+dimension parsing spec are done. The parser implementation and the bulk load remain.
 
 ---
 
@@ -221,6 +221,55 @@ That is a one-to-many relationship the source system could not express in a flat
 data, then normalise into an `artists` table plus a link table as a later Alembic migration.
 Shipping flat and then normalising in a migration is what real systems do, and it is a better
 story than pretending the schema was right first try.
+
+### The CSV extract adapter
+
+`pipeline/csv_extract.py` reads the bulk dump, filters to public domain, and emits records in
+contract shape. It does not validate, parse dimensions, or touch the database.
+
+**Baseline: 248,472 records in 5.2 seconds.** Reading and adapting the full file is effectively
+free. Whatever the load costs, that is where the time will go, and every load technique evaluated
+later is measured against this number.
+
+**Design decisions:**
+
+| Decision | Reason |
+|---|---|
+| Generator, `chunksize=500` | Streams the file rather than holding it in memory. A generator over a fully-read DataFrame would have had no memory benefit, since `read_csv` peaks before the first yield |
+| `COLUMN_MAP` at module level | The mapping can be diffed against the contract without reading a function body. `COLUMN_MAP.values()` also supplies the expected field names to the tests |
+| Select, then rename | `chunk[list(COLUMN_MAP.keys())]` keeps only contract columns. An unknown source column is now a `KeyError` rather than a silent leak into the records |
+| `limit` via `islice` over a private `_read_all` | Reuses the standard library rather than a hand-rolled counter, which had an off-by-one in the first draft |
+| 29 fields, not 32 | `height_cm`, `width_cm`, `depth_cm` do not exist in the source. They are transform-derived |
+
+**Null handling crosses the pandas boundary.** `na_values` converts empty strings to `nan`, but
+`nan` is not `None`, and the gate checks `is None`. A null required field would have passed
+validation and failed at insert.
+
+Converting inside pandas does not work: `df.where(df.notna(), None)` on a float64 column assigns
+`None` and pandas immediately converts it back to `nan`, the only null a float column can hold.
+**The conversion has to happen after `to_dict`, where values are plain Python.** The type system
+ends where you leave the library, not where you want it to.
+
+**`accession_year` needed three attempts.** Pandas widens an integer column with nulls to
+float64. The first fix, `None if ... or type(value) == float`, converted *every* float to `None`,
+silently deleting the column while the type print reported `NoneType` as success. The same line
+would have deleted `height_cm`, `width_cm` and `depth_cm` the moment the transform produced them.
+
+The working fix normalises before parsing: `.astype(str).str.extract(r"^(\d{4})").astype("Int64")`.
+One code path handles floats, year strings, the two ISO-date rows, and nulls.
+
+**Verified by invariant, not by type:** 9,886 non-null values before conversion, 9,886 after, on
+10,000 records. Across the full file, 247,145 of 248,472 have an accession year.
+
+**Chunked reading infers dtypes per chunk.** Most chunks type `AccessionYear` as float64. The chunk
+holding an ISO date types it as object. A 10,000-row test can pass while the full run fails in one
+specific chunk. Declaring `dtype` in `read_csv` would make every chunk agree by construction.
+
+### Test fixture
+
+Adapter tests originally read the 303MB dump, which is gitignored, so they passed locally and could
+not run in CI. Replaced with `tests/fixtures/met_sample.csv`: 20 real public-domain rows, committed.
+Tests now run in milliseconds and depend on nothing outside the clone.
 
 ---
 
@@ -495,22 +544,220 @@ sends you to the wrong file. Rewritten to cover all four active rules plus the h
 
 ---
 
-## 9. Next steps
+## 9. Dimension parsing: the spec
 
-**Done:** the API response model (`fix/api-schema-alignment`) and the validation gate
-(`feat/validation-rules`).
+The `Dimensions` column is free text written by curators across a century. Before writing a
+parser, every one of the 248,472 public-domain strings was assigned to exactly one case, in
+precedence order, with counts that sum to the total. The parser implements the same cases in
+the same order, and the tests were written from this spec before the functions.
 
-**Immediate:** branch `feat/csv-extract-adapter`. Read `MetObjects.txt`, produce the shape
-defined in `docs/extract-contract.md`, prove it on a slice of a few hundred rows. Re-read the
-contract first: it was written at Milestone 0, before the century sentinels, before the 1500
-bound was deleted, and before the response model narrowed to 20 fields.
+### Profiling, briefly
 
-The empty-string normalisation currently lives in a `read_csv` call in the exploration script.
-The adapter must carry the same guarantee, or the required-field counts above do not apply to
-what the gate actually sees.
+- 31,931 rows (12.9%) have no dimension string
+- 441 are sentinel strings meaning "no data": `Dimensions unavailable`, `N.A.`, `Not available`,
+  and six variants, matched case-insensitively. `Various` is included, though it means "the
+  object has several sizes," not "no data." Same outcome, different meaning
+- Of strings with any content, **98.4% contain centimetres.** Inches-only is 0.9%, which settled
+  the deferred decision: no fraction arithmetic, those rows stay unparsed
+- About 61,000 cm strings hold more than one measurement. **Structure lives at the line level:**
+  in most, the first line is the object and later lines are labelled extras (`Framed`, `Sight`,
+  `Lip diameter`). Whole-string rules kept multiplying until the unit of analysis changed from
+  string to first line
 
-**Then:** transform (type casts, dimension parsing, empty-string normalisation), and the bulk
-load.
+### The shared parse rule
+
+> Normalise `×` to `x`. Split the line on `;`. For each segment, drop a leading component label
+> (non-digit text ending in a colon). Then, in order: if the segment's axis labels and its unit
+> block's values line up one to one, each label takes its value (labelled block). Otherwise, if
+> the segment starts with an axis label, its first number before the unit fills that field.
+> Otherwise, the unit block fills height, width, depth by position. `L.` is never placed
+> directly: it is held, then placed by the fallback rule below. Numbers not followed by the
+> unit are ignored. A field already set is not overwritten.
+
+**Component labels end in a colon, axis labels end in a period.** That one character is how the
+parser tells `Backplate:` from `Diam.`. The first draft of this rule missed it, and would have put
+the diameter in `Backplate: Diam. 2 3/4 in. (7 cm)` into `height_cm`. Writing the tests before the
+function is what found it.
+
+Labels win over position everywhere, including single measurements. A lone
+`Diam. 3 in. (7.6 cm)` would otherwise put a diameter into `height_cm`.
+
+| Label | Field | Note |
+|---|---|---|
+| `H.` | height | |
+| `W.` | width | |
+| `D.` | depth | Met convention: `D.` is depth, `Diam.` is diameter |
+| `Diam.` | width | For round objects, diameter is the width |
+| `L.` | fallback | Placed after the other axes. See below |
+
+### `L.` is a fallback axis
+
+> After `H.`, `W.`, `D.` and `Diam.` have been placed, `L.` fills width if it is still empty,
+> otherwise height if that is still empty. If both are filled, it is dropped.
+
+The first version mapped `L.` straight to width. Across the full file, 13,056 strings contain
+both `L.` and `W.`, and 2,738 contain both `L.` and `H.`. Mapping `L.` to width discarded every
+`W.` in the first group. Mapping it to height would have discarded every `H.` in the second.
+Both pairings are common, so neither fixed mapping is acceptable.
+
+| Input | Result |
+|---|---|
+| `L.` only | width |
+| `L.` + `W.` | `W.` → width, `L.` → height. A textile's length is how it hangs |
+| `L.` + `H.` | `H.` → height, `L.` → width |
+| `L.` + `Diam.` | `Diam.` → width, `L.` → height. A rod or tube |
+| `L.` + `W.` + `H.` | `L.` dropped. Documented loss |
+
+**This bug was live on rows the harness counted as parsed.** Width held a length, and every
+counter reported success. Found by counting label pairings, not by any failing test.
+
+### Labelled blocks
+
+> Collect the axis labels in a segment, in order. Remove them, then find the unit block. If the
+> number of labels equals the number of values, each label takes its value. Otherwise, the
+> earlier rules apply unchanged.
+
+The dominant textile format puts the labels in the inch part and a plain block in the cm part:
+`L. 56 1/2 x W. 24 1/4 inches (143.5 x 61.6 cm)`. Before this rule, the segment started with
+`L.`, so the parser took the first number before `cm`, which is 61.6, the width. Width came out
+right by accident; length was discarded.
+
+Removing the labels first also handles labels inside the block itself:
+`L. 1.1 × W. 0.7 × H. 0.5 cm` becomes `1.1 x 0.7 x 0.5 cm`.
+
+**The count check is the safety net.** The rule only fires when labels and values pair one to
+one, so every existing test stayed green. `Wt.` and `OH.` are not labels: the pattern requires
+the label not to be preceded by a letter, and to be followed directly by a dot.
+
+### Cases, in precedence order
+
+| # | Case | Rule | Rows |
+|---|---|---|---|
+| 1 | Null | All three null | 31,931 |
+| 2 | Sentinel | All three null | 441 |
+| 3 | Set markers `(a):` | Null, raw preserved. No single size exists | 493 |
+| 4 | Single measurement | Parse the whole string | 151,590 |
+| 5 | Multi, first line `Overall:` | Parse the first line | 2,828 |
+| 6 | Multi, first line component label | Parse the first line. The main component stands for the object | 18,433 |
+| 7 | Multi, first line unlabelled | Parse the first line, ignore later lines | 39,183 |
+| 8 | cm, anything else | Null, raw preserved | 158 |
+| 9 | Inches only | Null, raw preserved | 1,969 |
+| 10 | mm only | Parse like cm, then divide by 10. **Checked before inches**, see below | 410 |
+| 11 | Other, incl. one metre-only row | Null, raw preserved | 1,036 |
+| | **Total** | | **248,472** |
+
+**Parsed:** cases 4, 5, 6, 7, 10. 212,444 rows, **98.3% of strings with any dimension text**,
+85.5% of the collection.
+
+Profiling was done with an ordered `claim()` function over a running `remaining` mask, so each
+case takes its share of what is left and the catch-all guarantees no gaps. The parser uses the
+same structure.
+
+### Decisions worth defending
+
+- **Sets are null.** Some lead with a whole-object measurement (`H. as mounted 75.57 cm`) that
+  this loses. Consistent with the 2099 and inches decisions: honest over complete. The raw string
+  is exposed in the API
+- **Component labels stand for the object** (case 6). Less honest than the set rule, defensible
+  because `dimensions` is in the response and a reader can see the full text
+- **`(each)` gives one piece's size.** A pair of earrings measured `(each): 3 cm` records one
+  earring. Same reasoning as case 6
+- **Case 8 is a real long tail:** ranges (`14.0 cm to 17.1 cm`), alternatives joined by `or`,
+  accession numbers as first lines, cm outside parentheses. No single correct value exists
+
+### What profiling got wrong along the way
+
+- `str.contains("()")` matched every string, because `()` is an empty regex group
+- `str.contains("cm)")` missed cm-first and cm-with-weight formats
+- A ten-row sample suggested "the first measurement is always the overall." The full data
+  contradicted it on the first extreme case read
+- The set regex `\([a-z]+\):` looked correct on ten rows. A label-length count showed three
+  quarters of matches were words like `(confirmed)`, `(trimmed)` and `(each)`, qualifiers on a
+  single object. Narrowing to `\([a-z]{1,3}\):` moved 4,095 rows out of the null bucket, 4,092
+  of them into parsed cases
+
+**Every one was caught by a count, not by reading rows.**
+
+### The old transform
+
+`clean_data` was written for the scraper's shape: creator coalescing, scraper-vocabulary renames,
+and a dimension regex matching only cm inside parentheses. Deleted. The adapter now owns renaming,
+and transform receives contract-shape records from any source. The one idea carried forward is
+normalising `×` to `x`.
+
+`pipeline/main.py` imported `clean_data`, so the orchestrator is broken until the load is
+rewritten, alongside `database.py`.
+
+### What the full-file run found
+
+`scripts/check_transform.py` streams all 248,472 records through `transform_record` and counts
+outcomes. Unit tests prove the code matches the spec. **The full run tests whether the spec
+matches the data.** Each change below was made with a predicted movement, then checked.
+
+| Step | Measure | Before | After |
+|---|---|---|---|
+| First full run | parsed | 212,444 routed (spec) | 212,626 |
+| | exceptions | | **0** |
+| | time | 5.2s extract only | 5.9s. Transform costs ~0.7s |
+| mm checked before inches | overlap rows parsed | 0 | 710 of 712 |
+| Unexplained between two runs | parsed | 212,626 | 212,643 |
+| `L.` fallback | `L.`+`W.`, parsed, no height | 10,665 | 8,090 |
+| Labelled blocks | `L.`+`W.`, parsed, no height | 8,090 | **1,109** |
+| | parsed | 212,643 | 212,645 |
+
+**Current coverage: 212,645 rows, 98.4% of strings with dimension text, 85.6% of the
+collection.**
+
+**The net number hid a loss.** The first run came out 182 above the spec. The mm change alone
+recovered 710, so 528 rows routed to parsing cases were coming back empty. 506 of them had a
+label alone on the first line. **A spec built from routing conditions describes where rows go,
+not whether the work succeeds there.**
+
+**The first 15 samples were not a sample.** They suggested scrolls measured in metres were half
+the remaining problem. A seeded random sample of 40 found zero scrolls; the real shape was
+labelled blocks, about 95% of the population. The file is in object-ID order, so related objects
+sit together.
+
+**A presence check cannot see a value bug.** The `L.` collision lived on rows counted as parsed.
+It only became visible with a counter that could fail for it: `L.` and `W.` present, height empty.
+
+### Parked: continuation lines
+
+Of the remaining 1,109, a random sample of 40 split as: axes on separate lines 29, sets without
+parentheses 2, cm-first value pairs 2, unknown label `Th.` 2, source errors and ranges 5.
+
+**Axes on separate lines are the same shape as the 506 label-only rows.** One rule covers both,
+about 1,300 rows:
+
+> The first line extends through any following lines that begin with an axis label. The
+> extended block is joined with `;` and parsed.
+
+It must ship together with a set rule for letter labels without parentheses (`Kaftan a:`,
+`07.236.21a:`). Today those return empty by accident; with continuation lines alone they would
+parse the first component as the object.
+
+The tests exist in `tests/test_transform.py`, marked `xfail(strict=True)`. Implementing the rule
+turns them into XPASS failures, which is the signal to remove the marks.
+
+**Long tail, not chased:** `Th.` labels, cm-first pairs, curator typos (`(34.6 cm0`, `(cm)`),
+ranges. Roughly 10% of 1,109.
+
+---
+
+## 10. Next steps
+
+**Done:** API response model, validation gate, CSV extract adapter.
+
+**Done:** API response model, validation gate, CSV extract adapter, dimension parsing spec.
+
+**Done:** API response model, validation gate, CSV extract adapter, dimension parsing (cases,
+`L.` fallback, labelled blocks, mm precedence), full-file harness.
+
+**Paused here.** To resume: implement continuation lines and the parenthesis-free set rule
+together in `parse_dimensions`. The four `xfail` tests define the target. Then rerun
+`scripts/check_transform.py` and predict: label-only close to 0, `L.`+`W.` no height near 300.
+
+**Then:** the bulk load, rewriting `database.py` and `pipeline/main.py`.
 
 The current loader does `INSERT ... ON CONFLICT DO UPDATE` row by row through the ORM. At 126
 rows that is instant. At 248,325 it will be unusably slow: one round trip plus ORM object
@@ -523,7 +770,7 @@ picking a technique before running the load once is how this milestone eats a we
 
 ---
 
-## 10. Working principles established
+## 11. Working principles established
 
 **Verify before fixing.** Confirm a hypothesis with a print or a query before changing code.
 Several times this session the first hypothesis was wrong and the check cost ten seconds.
@@ -569,6 +816,32 @@ explicit `.isna()`.
 would pass a status-code test and a schema-validation test. The bug lives in the gap between "the
 shape is correct" and "the values are true," which is where most real data incidents happen.
 
+**Assert invariants, not types.** A type conversion should not change how many values exist.
+Checking "is it still a float?" passed while a column was being deleted. Checking "same non-null
+count before and after?" would have caught it in thirty seconds.
+
+**A result equal to the denominator is a result to check.** A 100% match on free text is almost
+never real. It usually means the check is testing something other than what was intended.
+
+**Write the spec as sentences, then the tests, then the code.** A rule that cannot be stated in
+a sentence will not be fixed by a regex. Turning each sentence into an assert found a gap before
+any parsing code existed.
+
+**Narrow patterns to the meaning, not the shape.** `\([a-z]+\):` matched the shape of a set
+marker. `\([a-z]{1,3}\):` matches what set markers are. Narrowing recovered 4,092 measurements.
+
+**Net hides gross.** A total that matches a prediction can be two errors cancelling out. +182
+was really +710 and −528. Reconcile the movements, not just the totals.
+
+**The first N is not a random sample.** Data in storage order clusters. Sample with
+`random.sample` and a fixed seed, so the sample is fair and repeatable.
+
+**A check must be able to fail for the bug it guards.** A parsed-row count could not see a
+width that held a length.
+
+**Know which change moved a number.** Compare figures from one run, or write down what changed
+between runs.
+
 ### Recurring traps
 
 - **Working directory and `__file__` path resolution.** Hit five times. Moving a file changes the meaning of every self-relative path inside it.
@@ -576,6 +849,15 @@ shape is correct" and "the values are true," which is where most real data incid
 - **Forgetting to activate `.venv`.** macOS ships no `python` command, only `python3`, so `command not found: python` is a reliable tell.
 - **Confusing the SQLAlchemy model with the Pydantic model.** Made twice. Fixed structurally by naming (`Artworks` vs `ArtworkResponse`) rather than by resolving to be more careful.
 - **Partial defensive coding.** A null guard applied to one operand of a comparison. The guard that *was* written creates confidence the case is handled, so reviewers skim past it.
+- **Masks without a population.** A mask starting with `~` alone describes the whole table.
+  Every mask is `POPULATION & CONDITION`, and `~` only goes on a condition or an earlier bucket.
+- **Ten-row samples.** Three times in one profiling session, ten rows looked clean and the full
+  count did not. A pattern is characterised by counting it.
+- **The regex flag, both ways.** `regex=False` when searching for characters, a raw string with
+  regex on when searching for a pattern. Hit from both sides in two turns.
+- **Nulls in derived columns.** A column produced by `.str.split()` returned `NaN` from
+  `str.contains`, where the original column returned `False`. Always pass `na=False`, and check
+  that a mask's dtype is `bool`.
 
 ### Environment
 
@@ -594,7 +876,7 @@ solving a problem already met by hand.
 
 ---
 
-## 11. Deployment
+## 12. Deployment
 
 Undecided, deferred to Milestone 11. Preference is free or very cheap.
 
@@ -608,7 +890,7 @@ from committed source data is a real asset rather than a nicety.
 
 ---
 
-## 12. README obligations
+## 13. README obligations
 
 Carried from the original project plan, to be satisfied before this is considered done:
 
@@ -622,3 +904,5 @@ Carried from the original project plan, to be satisfied before this is considere
 - The 1500-bound finding: a validation rule that would have quarantined 33.9% of the collection, with the department breakdown
 - The century-sentinel convention (1899 / 1999 / 2099) and the decision to quarantine 2099 as a known false positive
 - Why the response model exposes 20 of 32 columns, and why `dimensions` and `date` are kept as strings alongside the parsed values
+- The dimension spec: 11 cases, counts summing to 248,472, 98.3% of dimension strings parsed
+- The set-regex finding: narrowing a pattern recovered 4,092 measurements
