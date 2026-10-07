@@ -9,8 +9,18 @@ def dims(h=None, w=None, d=None):
 
 EMPTY = dims()
 
+CONTINUATION = pytest.mark.xfail(
+    strict=True,
+    reason="continuation-lines rule not implemented yet (project log, section 9)",
+)
+SET_NO_PARENS = pytest.mark.xfail(
+    strict=True,
+    reason="sets without parentheses not detected yet (project log, section 9)",
+)
+
 
 # -------- parse_line: the shared rule -------- #
+
 
 @pytest.mark.parametrize(
     "line, expected",
@@ -37,6 +47,16 @@ EMPTY = dims()
         ("Sheet (confirmed): 12 x 9 in. (30.5 x 22.9 cm)", dims(30.5, 22.9)),
         ("Ring pull: Diam. 1 in. (2.5 cm)", dims(w=2.5)),
         ("12 x 9 in. (30.5 x 22.9 cm)\r\nMat: 20 x 16 in.", dims(30.5, 22.9)),
+        ("W. 5 3/4 in. (14. cm)", dims(w=14.0)),
+        ("H. 2 3/4 in. (7.cm)", dims(h=7.0)),
+        ("L. 20 in. (50.8 cm); W. 10 in. (25.4 cm)", dims(h=50.8, w=25.4)),
+        ("L. 20 in. (50.8 cm); H. 10 in. (25.4 cm)", dims(h=25.4, w=50.8)),
+        ("L. 12 in. (30.5 cm)", dims(w=30.5)),
+        # labels inline, one shared unit block
+        ("L. 56 1/2 x W. 24 1/4 inches (143.5 x 61.6 cm)", dims(h=143.5, w=61.6)),
+        ("W. 3 1/2 × L. 12 1/4 in. (8.9 × 31.1 cm)", dims(h=31.1, w=8.9)),
+        ("L. 1.1 × W. 0.7 × H. 0.5 cm (7/16 × 1/4 × 3/16 in.)", dims(h=0.5, w=0.7)),
+        ("L. 78 1/4 x W. (loom): 25 1/2 inches (198.8 x 64.8 cm)", dims(h=198.8, w=64.8)),
     ],
 )
 def test_parse_line(line, expected):
@@ -44,6 +64,7 @@ def test_parse_line(line, expected):
 
 
 # -------- parse_dimensions: the cases, in precedence order -------- #
+
 
 @pytest.mark.parametrize(
     "text, expected",
@@ -56,14 +77,20 @@ def test_parse_line(line, expected):
         # 3. sets
         ("(a): 94 x 62 in. (238.8 x 157.5 cm)\r\n(b): 94 x 31 1/2 in. (238.8 x 80 cm)", EMPTY),
         # 5. multi, first line Overall
-        ("Overall: 12 x 10 in. (30.5 x 25.4 cm)\r\nBase: 4 x 4 in. (10.2 x 10.2 cm)",
-        dims(30.5, 25.4)),
+        (
+            "Overall: 12 x 10 in. (30.5 x 25.4 cm)\r\nBase: 4 x 4 in. (10.2 x 10.2 cm)",
+            dims(30.5, 25.4),
+        ),
         # 6. multi, first line component
-        ("Backplate: 4 7/8 x 4 1/4 in. (12.4 x 10.8 cm)\r\nRing pull: Diam. 1 in. (2.5 cm)",
-        dims(12.4, 10.8)),
+        (
+            "Backplate: 4 7/8 x 4 1/4 in. (12.4 x 10.8 cm)\r\nRing pull: Diam. 1 in. (2.5 cm)",
+            dims(12.4, 10.8),
+        ),
         # 7. multi, first line unlabelled
-        ("24 7/8 x 20 11/16 x 1 in. (63.2 x 52.5 x 2.5 cm)\r\nSight: 22 1/16 x 17 13/16 in. (56 x 45.2 cm)",
-        dims(63.2, 52.5, 2.5)),
+        (
+            "24 7/8 x 20 11/16 x 1 in. (63.2 x 52.5 x 2.5 cm)\r\nSight: 22 1/16 x 17 13/16 in. (56 x 45.2 cm)",
+            dims(63.2, 52.5, 2.5),
+        ),
         # 8. cm, anything else
         ("L. 24 1/2 x W. 5 1/2 to 6 3/4 inches\r\n62.2 x 14.0 cm to 17.1 cm", EMPTY),
         # 10. mm only, divided by 10
@@ -73,6 +100,31 @@ def test_parse_line(line, expected):
         ("Length 3-1/2 in.", EMPTY),
         # 11. other
         ("12 x 165 ft. (3.6 x 49.5 m)", EMPTY),
+        # 7b. axes split across lines. Parked: continuation lines
+        pytest.param(
+            "L. 158 in. (401.3 cm)\r\nW. 86 in. (218.4 cm)",
+            dims(h=401.3, w=218.4),
+            marks=CONTINUATION,
+        ),
+        pytest.param(
+            "Overall:\r\n   L. 50 3/8 in. (128 cm)\r\n   W. 61 3/4 in. (156.8 cm)",
+            dims(h=128.0, w=156.8),
+            marks=CONTINUATION,
+        ),
+        pytest.param(
+            "Textile: L. 6 in. (15.2 cm)\r\n   W. 3 in. (7.6 cm)\r\nMat: L. 12 in. (30.5 cm)\r\n   W. 9 in. (22.9 cm)",
+            dims(h=15.2, w=7.6),
+            marks=CONTINUATION,
+        ),
+        # 3b. sets without parentheses
+        # Passes today only because the first line is a bare label.
+        # Must keep passing once continuation lines are implemented.
+        ("Kaftan a:\r\n   L. 54 in. (137.2 cm)\r\nTrousers b:\r\n   L. 45 in. (114.3 cm)", EMPTY),
+        pytest.param(
+            "07.236.21a: L. 5 15/16 in. (15.1 cm)\r\n   W. 3 7/16 in. (8.8 cm)\r\n07.236.21b: L. 4 3/4 in. (12 cm)",
+            EMPTY,
+            marks=SET_NO_PARENS,
+        ),
     ],
 )
 def test_parse_dimensions(text, expected):
@@ -80,6 +132,7 @@ def test_parse_dimensions(text, expected):
 
 
 # -------- transform_record: the stage interface -------- #
+
 
 def test_transform_record_adds_parsed_fields_and_keeps_raw():
     record = {"id": 1, "dimensions": "H. 12 in. (30.5 cm)"}
